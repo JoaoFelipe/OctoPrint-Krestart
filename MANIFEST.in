@@ -1,0 +1,4 @@
+include README.md
+recursive-include octoprint_krestart/templates *
+recursive-include octoprint_krestart/translations *
+recursive-include octoprint_krestart/static *
