@@ -5,6 +5,8 @@ import octoprint.plugin
 import RPi.GPIO as GPIO
 import time
 import thread
+import os
+
 
 class KrestartPlugin(octoprint.plugin.SettingsPlugin,
                      #octoprint.plugin.AssetPlugin,
@@ -16,75 +18,146 @@ class KrestartPlugin(octoprint.plugin.SettingsPlugin,
     def on_after_startup(self):
         self._logger.info("Krestart - startup")
         GPIO.setmode(GPIO.BOARD)
-        led_pin = int(self._settings.get(["led_pin"]))
-        btn_pin = int(self._settings.get(["btn_pin"]))
-        self._logger.info("Krestart - L:{}, B:{}".format(led_pin, btn_pin))
+        led_pin = self.led_pin = int(self._settings.get(["led_pin"])) 
+        btn1_pin = self.btn1_pin = int(self._settings.get(["btn1_pin"])) 
+        btn2_pin = self.btn2_pin = int(self._settings.get(["btn2_pin"])) 
+        btn3_pin = self.btn3_pin = int(self._settings.get(["btn3_pin"])) 
+        self._logger.info("Krestart - L:{}".format(led_pin))
         GPIO.setup(led_pin, GPIO.OUT)
-        GPIO.setup(btn_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.output(led_pin, GPIO.LOW)
-        GPIO.remove_event_detect(btn_pin)
-        GPIO.add_event_detect(btn_pin, GPIO.FALLING, callback=self._btn_click, bouncetime=200)
-        self._active = False
-        self._clicks = 0
-        self._led_status = False
+        GPIO.setup(btn1_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(btn2_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(btn3_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.output(led_pin, GPIO.HIGH)
+        GPIO.remove_event_detect(btn1_pin)
+        GPIO.remove_event_detect(btn2_pin)
+        GPIO.remove_event_detect(btn3_pin)
+        GPIO.add_event_detect(btn1_pin, GPIO.FALLING, callback=self._btn_click1, bouncetime=200)
+        GPIO.add_event_detect(btn2_pin, GPIO.FALLING, callback=self._btn_click2, bouncetime=200)
+        GPIO.add_event_detect(btn3_pin, GPIO.FALLING, callback=self._btn_click3, bouncetime=200)
+        self._led_status = True
+        self._active1 = False
+        self._active2 = False
+        self._active3 = False
+        self._clicks1 = 0
+        self._clicks2 = 0
+        self._clicks3 = 0
 
     def on_shutdown(self):
         GPIO.cleanup()
 
     def _blink(self, wait=0.5, wait_after=0.5):
-        led_pin = int(self._settings.get(["led_pin"])) 
+        led_pin = self.led_pin #int(self._settings.get(["led_pin"])) 
         GPIO.output(led_pin, not self._led_status)
         time.sleep(wait)
         GPIO.output(led_pin, self._led_status)
         time.sleep(wait_after)
+    
+    def exe_status(self):
+        self._printer.commands("status")
+        return True
 
+    def exe_firmware_restart(self):
+        if self._printer.is_ready():
+            self._printer.commands("firmware_restart")
+            return True
+        return False
 
-    def _execute_command(self):
+    def exe_restart(self):
+        if self._printer.is_ready():
+            self._printer.commands("restart")
+            return True
+        return False
+
+    def exe_m112(self):
+        self._printer.commands("M112")
+        return True
+
+    def exe_os_shutdown(self):
+        os.system('sudo shutdown -h now')
+        return True
+
+    def exe_os_restart(self):
+        os.system('sudo shutdown -r now')
+        return True
+
+    def exe_connect(self):
+        self._printer.connect("/tmp/printer")
+        return True
+
+    def _execute_command(self, cname, aname, btn, commands):
+        setattr(self, aname, True)
+        setattr(self, cname, 1)
         wait = float(self._settings.get(["click_timeout"]))
         self._logger.info("Krestart - thread wait {}".format(wait))
         time.sleep(wait)
-        if self._clicks > 5 or not self._active:
-            self._logger.info("Krestart - canceled")
+        clicks = getattr(self, cname, 0)
+        active = getattr(self, aname, 0)
+        for i in range(btn + 1):
             self._blink()
-        elif self._clicks != 0:
-            self._logger.info("Krestart - processing {} clicks".format(self._clicks))
-
-            command, condition = {
-                1: ("status", lambda self: True),
-                2: ("firmware_restart", lambda self: self._printer.is_ready()),
-                3: ("restart", lambda self: self._printer.is_ready()),
-                4: ("M112", lambda self: True),
-            }.get(self._clicks, ("", lambda self: False))
-            
-            self._logger.info("Krestart - preparing {}".format(command))
-            if not condition(self):
-                self._logger.info("Krestart - precondition failed. Aborting")
-                self._blink()
+        if active and clicks in commands:
+            self._logger.info("Krestart - processing {} clicks to {}".format(clicks, btn))
+            if not commands[clicks]():
+                for i in range(10):
+                    self._blink(0.1)
+                self._logger.info("Krestart - command failed")
             else:
-                if not self._printer.commands(command):
-                    self._logger.info("Krestart - command failed")
-                    self._blink()
+                self._logger.info("Krestart - command ok")
 
+        else:
+            self._logger.info("Krestart - no command")
         self._blink(1.0, 0)
-        self._active = False
-        self._clicks = 0
+        setattr(self, aname, False)
+        setattr(self, cname, 0)
 
-    def _btn_click(self, channel=None):
-        led_pin = int(self._settings.get(["led_pin"]))
-        if not self._active:
-            self._active = True
-            self._clicks = 0
-            thread.start_new_thread(self._execute_command, tuple())
-        self._clicks += 1
-        GPIO.output(led_pin, not self._led_status)
-        time.sleep(0.1)
-        GPIO.output(led_pin, self._led_status)
-        self._logger.info("Krestart - click ({})".format(self._clicks))
+    def _btn_click1(self, channel=None):
+        if not self._active1:
+            thread.start_new_thread(self._execute_command, (
+                '_clicks1', '_active1', 1, {
+                    1: self.exe_status,
+                    2: self.exe_firmware_restart,
+                    3: self.exe_restart,
+                })
+            )
+        else:
+            self._clicks1 += 1
+        self._blink(0.1)
+        self._logger.info("Krestart - click 1 ({})".format(self._clicks1))
+
+
+    def _btn_click2(self, channel=None):
+        if not self._active2:
+            thread.start_new_thread(self._execute_command, (
+                '_clicks2', '_active2', 2, {
+                    1: self.exe_connect,
+                    2: self.exe_m112,
+                })
+            )
+        else:
+            self._clicks2 += 1
+        self._blink(0.1)
+        self._logger.info("Krestart - click 2 ({})".format(self._clicks2))
+
+
+    def _btn_click3(self, channel=None):
+        if not self._active3:
+            thread.start_new_thread(self._execute_command, (
+                '_clicks3', '_active3', 3, {
+                    1: self.exe_status,
+                    2: self.exe_os_shutdown,
+                    3: self.exe_os_restart
+                })
+            )
+        else:
+            self._clicks3 += 1
+        self._blink(0.1)
+        self._logger.info("Krestart - click 3 ({})".format(self._clicks3))
 
     def get_settings_defaults(self):
         return dict(
-            led_pin="11",
-            btn_pin="12",
+            led_pin="12",
+            btn1_pin="11",
+            btn2_pin="13",
+            btn3_pin="15",
             click_timeout="3",
         )
 
