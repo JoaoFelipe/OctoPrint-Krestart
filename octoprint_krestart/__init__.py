@@ -8,26 +8,35 @@ import thread
 import os
 
 
-class KrestartPlugin(octoprint.plugin.SettingsPlugin,
-                     #octoprint.plugin.AssetPlugin,
+class Krestart(octoprint.plugin.SettingsPlugin,
+                     octoprint.plugin.AssetPlugin,
                      octoprint.plugin.TemplatePlugin,
                      octoprint.plugin.StartupPlugin,
                      octoprint.plugin.ShutdownPlugin,
-                     octoprint.plugin.RestartNeedingPlugin):
+                     octoprint.plugin.RestartNeedingPlugin,
+                     octoprint.plugin.SimpleApiPlugin):
 
     def on_after_startup(self):
         self._logger.info("Krestart - startup")
         GPIO.setmode(GPIO.BOARD)
         led_pin = self.led_pin = int(self._settings.get(["led_pin"])) 
+        light_pin = self.light_pin = int(self._settings.get(["light_pin"])) 
+        printer_pin = self.printer_pin = int(self._settings.get(["printer_pin"])) 
         btn1_pin = self.btn1_pin = int(self._settings.get(["btn1_pin"])) 
         btn2_pin = self.btn2_pin = int(self._settings.get(["btn2_pin"])) 
         btn3_pin = self.btn3_pin = int(self._settings.get(["btn3_pin"])) 
         self._logger.info("Krestart - L:{}".format(led_pin))
         GPIO.setup(led_pin, GPIO.OUT)
+        GPIO.setup(light_pin, GPIO.OUT)
+        GPIO.setup(printer_pin, GPIO.OUT)
+        GPIO.setup(light_pin, GPIO.OUT)
+        GPIO.setup(printer_pin, GPIO.OUT)
         GPIO.setup(btn1_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(btn2_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(btn3_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.output(led_pin, GPIO.HIGH)
+        GPIO.output(light_pin, GPIO.HIGH)
+        GPIO.output(printer_pin, GPIO.HIGH)
         GPIO.remove_event_detect(btn1_pin)
         GPIO.remove_event_detect(btn2_pin)
         GPIO.remove_event_detect(btn3_pin)
@@ -35,6 +44,8 @@ class KrestartPlugin(octoprint.plugin.SettingsPlugin,
         GPIO.add_event_detect(btn2_pin, GPIO.FALLING, callback=self._btn_click2, bouncetime=200)
         GPIO.add_event_detect(btn3_pin, GPIO.FALLING, callback=self._btn_click3, bouncetime=200)
         self._led_status = True
+        self._light_status = True
+        self._printer_status = True
         self._active1 = False
         self._active2 = False
         self._active3 = False
@@ -154,17 +165,49 @@ class KrestartPlugin(octoprint.plugin.SettingsPlugin,
 
     def get_settings_defaults(self):
         return dict(
-            led_pin="12",
+            led_pin="7",
             btn1_pin="11",
             btn2_pin="13",
             btn3_pin="15",
             click_timeout="3",
+            light_pin="8",
+            printer_pin="10",
         )
 
     def get_template_configs(self):
         return [
             dict(type="settings", custom_bindings=False),
         ]
+
+    def get_api_commands(self):
+        return dict(
+            toggleLight=[],
+            togglePrinter=[]
+        )
+
+    def on_api_command(self, command, data):
+        from octoprint.server import user_permission
+        from flask import make_response, jsonify
+
+        if not user_permission.can():
+            return make_response("Insufficient rights", 403)
+        if command == "toggleLight":
+            self._light_toggle()
+        elif command == "togglePrinter":
+            self._printer_toggle()
+
+    def _light_toggle(self):
+        self._logger.info("Krestart - Toggle Light")
+
+        self._light_status = not self._light_status
+        GPIO.output(self.light_pin, self._light_status)
+
+    def _printer_toggle(self):
+        self._logger.info("Krestart - Toggle Printer")
+
+        self._printer_status = not self._printer_status
+        GPIO.output(self.printer_pin, self._printer_status)
+
 
     ##~~ AssetPlugin mixin
 
@@ -207,7 +250,7 @@ __plugin_name__ = "Krestart Plugin"
 
 def __plugin_load__():
     global __plugin_implementation__
-    __plugin_implementation__ = KrestartPlugin()
+    __plugin_implementation__ = Krestart()
 
     global __plugin_hooks__
     __plugin_hooks__ = {
